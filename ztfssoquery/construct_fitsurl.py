@@ -6,6 +6,7 @@ from pathlib import Path
 import time
 import re
 import requests
+import os
 from io import BytesIO
 from astropy.io.votable import parse
 from astroquery.jplhorizons import Horizons
@@ -174,7 +175,7 @@ def generate_fits_urls(
     # Query ZTF metadata
     df_ztf = pd.DataFrame() 
 
-    for _, eph_row in tqdm(eph.iterrows(), total=len(eph), desc="Querying ZTF"):
+    for _, eph_row in tqdm(eph.iterrows(), total=len(eph), desc="Querying ZTF metadata..."):
         try:
             datetime_jd = eph_row["datetime_jd"]
             ra = eph_row["RA"]
@@ -232,3 +233,53 @@ def generate_fits_urls(
 
     # Save all FITS URLs to a text file
     save_fitsurl(df_ztf, fpath_out=OUTDIR / "fits_urls.txt", is_cutout=is_cutout, cutout_size=cutout_size)
+    
+def import_fitsurl(url_file_path, output_dir=None):
+    """
+    Reads a list of URLs from a file and downloads them.
+    
+    Parameters:
+        url_file_path (str or Path): Path to the text file containing URLs.
+        output_dir (str or Path): Directory to save downloaded files. 
+                                  If None, defaults to the directory containing url_file_path.
+    """
+    path = Path(url_file_path)
+    if not path.exists():
+        print(f"❌ File not found: {path}")
+        return
+
+    if output_dir is None:
+        output_dir = path.parent
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(path, 'r') as f:
+        urls = [line.strip() for line in f if line.strip()]
+
+    print(f"⬇️ Starting download of {len(urls)} files to {output_dir}")
+
+    for url in tqdm(urls, desc="Downloading FITS"):
+        try:
+            # Clean URL to get filename (remove query params like ?center=...)
+            # Example: .../ztf_..._sciimg.fits?center=... -> ztf_..._sciimg.fits
+            clean_url = url.split('?')[0]
+            filename = os.path.basename(clean_url)
+            save_path = output_dir / filename
+            
+            # Check if file already exists to avoid re-downloading
+            if save_path.exists():
+                continue
+
+            response = requests.get(url, stream=True)
+            if response.status_code == 200:
+                with open(save_path, 'wb') as f_out:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f_out.write(chunk)
+            else:
+                print(f"Failed to download {url}: Status {response.status_code}")
+                
+        except Exception as e:
+            print(f"Error downloading {url}: {e}")
+
+    print("✅ Download complete.")
